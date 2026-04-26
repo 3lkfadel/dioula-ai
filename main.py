@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from contextlib import asynccontextmanager
-from api.inference import get_engine
+from inference import get_engine
 import uuid
 import time
 
