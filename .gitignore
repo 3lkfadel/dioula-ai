@@ -1,0 +1,25 @@
+# Modèles (trop lourds pour GitHub — stocker sur S3 ou HuggingFace Hub)
+model/
+*.safetensors
+*.bin
+*.gguf
+
+# Dataset brut et splits (régénérables avec les scripts)
+dataset_raw.json
+dataset_train.jsonl
+dataset_valid.jsonl
+dataset_test.jsonl
+train.jsonl
+valid.jsonl
+test.jsonl
+
+# Environnement virtuel
+env/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# Résultats de benchmark (générés à l'exécution)
+benchmark_results.json

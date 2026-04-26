@@ -1,0 +1,23 @@
+# === Core ML (Linux / AWS GPU) ===
+torch>=2.3.0
+accelerate>=0.30.0
+
+# === HuggingFace ===
+transformers>=4.45.0
+datasets>=2.20.0
+huggingface_hub>=0.24.0
+peft>=0.11.0
+
+# === Data processing ===
+pandas>=2.0.0
+numpy>=1.26.0
+tqdm>=4.66.0
+
+# === API ===
+fastapi>=0.115.0
+uvicorn>=0.30.0
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+
+# === Utils ===
+python-dotenv>=1.0.0
