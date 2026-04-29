@@ -8,13 +8,14 @@ import os
 import random
 
 OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
-RAW_FILE    = os.path.join(OUTPUT_DIR, "dataset_raw.json")
+RAW_FILE    = os.path.join(OUTPUT_DIR, "dataset_clean.json")
 TRAIN_FILE  = os.path.join(OUTPUT_DIR, "dataset_train.jsonl")
 VALID_FILE  = os.path.join(OUTPUT_DIR, "dataset_valid.jsonl")
 TEST_FILE   = os.path.join(OUTPUT_DIR, "dataset_test.jsonl")
 
 TRAIN_RATIO = 0.90
 VALID_RATIO = 0.05
+MAX_PAIRS   = 38027  # Dataset propre complet, sans doublons
 
 SYSTEM_PROMPT = (
     "Tu es un assistant expert en langue Dioula (Jula), "
@@ -24,26 +25,33 @@ SYSTEM_PROMPT = (
 )
 
 
+PROMPT_BASE = (
+    "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n"
+    "{system}<|eot_id|>"
+    "<|start_header_id|>user<|end_header_id|>\n"
+    "{user}<|eot_id|>"
+    "<|start_header_id|>assistant<|end_header_id|>\n"
+)
+
+
 def make_fr_to_dioula(fr, dioula):
-    return {"text": (
-        f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n"
-        f"{SYSTEM_PROMPT}<|eot_id|>"
-        f"<|start_header_id|>user<|end_header_id|>\n"
-        f"Traduis en Dioula : {fr.strip()}<|eot_id|>"
-        f"<|start_header_id|>assistant<|end_header_id|>\n"
-        f"{dioula.strip()}<|eot_id|>"
-    )}
+    return {
+        "prompt": PROMPT_BASE.format(
+            system=SYSTEM_PROMPT,
+            user=f"Traduis en Dioula : {fr.strip()}"
+        ),
+        "completion": f"{dioula.strip()}<|eot_id|>"
+    }
 
 
 def make_dioula_to_fr(fr, dioula):
-    return {"text": (
-        f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n"
-        f"{SYSTEM_PROMPT}<|eot_id|>"
-        f"<|start_header_id|>user<|end_header_id|>\n"
-        f"Traduis en français : {dioula.strip()}<|eot_id|>"
-        f"<|start_header_id|>assistant<|end_header_id|>\n"
-        f"{fr.strip()}<|eot_id|>"
-    )}
+    return {
+        "prompt": PROMPT_BASE.format(
+            system=SYSTEM_PROMPT,
+            user=f"Traduis en français : {dioula.strip()}"
+        ),
+        "completion": f"{fr.strip()}<|eot_id|>"
+    }
 
 
 def make_conversation(fr, dioula):
@@ -53,14 +61,13 @@ def make_conversation(fr, dioula):
         f"Dis-moi en Dioula : {fr.strip()}",
         f"En Dioula, comment exprime-t-on : {fr.strip()} ?",
     ]
-    return {"text": (
-        f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n"
-        f"{SYSTEM_PROMPT}<|eot_id|>"
-        f"<|start_header_id|>user<|end_header_id|>\n"
-        f"{random.choice(questions)}<|eot_id|>"
-        f"<|start_header_id|>assistant<|end_header_id|>\n"
-        f"{dioula.strip()}<|eot_id|>"
-    )}
+    return {
+        "prompt": PROMPT_BASE.format(
+            system=SYSTEM_PROMPT,
+            user=random.choice(questions)
+        ),
+        "completion": f"{dioula.strip()}<|eot_id|>"
+    }
 
 
 def format_dataset():
@@ -69,7 +76,13 @@ def format_dataset():
         raw_data = json.load(f)
 
     print(f"✅ {len(raw_data)} exemples chargés")
-    print(f"📋 Aperçu : FR='{raw_data[0]['source']}' | DY='{raw_data[0]['target']}'\n")
+
+    # Sous-échantillonnage reproductible
+    random.seed(42)
+    random.shuffle(raw_data)
+    raw_data = raw_data[:MAX_PAIRS]
+    print(f"✂️  Sous-échantillon : {len(raw_data)} paires (MAX_PAIRS={MAX_PAIRS})")
+    print(f"📋 Aperçu : FR='{raw_data[0]['source']}' | DY='{raw_data[0]['target']}'")
 
     all_examples = []
     print("🔄 Formatage des données...")
@@ -87,7 +100,6 @@ def format_dataset():
 
     print(f"✅ {len(all_examples)} exemples générés (x3 par paire)\n")
 
-    random.seed(42)
     random.shuffle(all_examples)
 
     n       = len(all_examples)
@@ -109,10 +121,15 @@ def format_dataset():
     save_jsonl(train_data, TRAIN_FILE)
     save_jsonl(valid_data, VALID_FILE)
     save_jsonl(test_data,  TEST_FILE)
+    # Fichiers attendus par mlx_lm.lora --data "."
+    save_jsonl(train_data, os.path.join(OUTPUT_DIR, "train.jsonl"))
+    save_jsonl(valid_data, os.path.join(OUTPUT_DIR, "valid.jsonl"))
+    save_jsonl(test_data,  os.path.join(OUTPUT_DIR, "test.jsonl"))
 
     print(f"\n🔍 Exemple d'entraînement :")
     print("-" * 60)
-    print(train_data[0]["text"])
+    ex = train_data[0]
+    print(ex["prompt"] + ex["completion"])
     print("-" * 60)
     print(f"\n✅ Dataset prêt !")
     print(f"   Train : {len(train_data)} | Valid : {len(valid_data)} | Test : {len(test_data)}")

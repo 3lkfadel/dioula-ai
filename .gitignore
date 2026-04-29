@@ -4,8 +4,10 @@ model/
 *.bin
 *.gguf
 
-# Dataset brut et splits (régénérables avec les scripts)
+# Dataset brut (remplacé par dataset_clean.json)
 dataset_raw.json
+
+# Splits JSONL (régénérables via : python3 2_prepare_dataset.py)
 dataset_train.jsonl
 dataset_valid.jsonl
 dataset_test.jsonl
@@ -23,3 +25,6 @@ __pycache__/
 
 # Résultats de benchmark (générés à l'exécution)
 benchmark_results.json
+
+# Cache HuggingFace
+.cache/

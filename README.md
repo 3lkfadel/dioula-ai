@@ -1,23 +1,13 @@
-# Dioula-AI — Fine-tuning LLaMA 3.2 en Dioula
+# Dioula-AI — Fine-tuning Llama 3.1 70B en Dioula
 
 Modèle de traduction et de conversation **Français ↔ Dioula (Jula)**,
-entraîné en local sur Mac M1 Pro avec MLX, déployable sur AWS via PyTorch.
+fine-tuné avec QLoRA sur **38 027 paires** de phrases propres et dédupliquées.
 
-Le moteur d'inférence détecte automatiquement la plateforme au démarrage :
-- **Mac Apple Silicon** → backend MLX (rapide, optimisé Metal)
-- **AWS / Linux** → backend PyTorch (GPU CUDA ou CPU)
-
----
-
-## Stack technique
-
-| Composant | Mac (dev) | AWS (prod) |
-|---|---|---|
-| Runtime ML | MLX + MLX-LM | PyTorch + Transformers |
-| Modèle base | LLaMA 3.2 3B (converti MLX, 4-bit) | LLaMA 3.2 3B (float16, fusionné) |
-| Fine-tuning | `mlx_lm.lora` (LoRA) | — (fait sur Mac) |
-| API | FastAPI + Uvicorn | FastAPI + Uvicorn |
-| Dataset | Findora/hf_fr_dioula_full (HuggingFace) | — |
+- **Modèle de base** : Llama 3.1 70B Instruct (Meta)
+- **Méthode** : QLoRA 4-bit (PEFT + bitsandbytes + TRL)
+- **Dataset** : 38 027 paires FR↔Dioula → 114 075 exemples (x3 augmentation)
+- **Fine-tuning** : AWS EC2 GPU (p3/p4d)
+- **Inférence** : AWS EC2 ou API FastAPI
 
 ---
 
@@ -25,196 +15,166 @@ Le moteur d'inférence détecte automatiquement la plateforme au démarrage :
 
 ```
 dioula-ai/
-├── 1_download_dataset.py     # Étape 1 — Télécharge le dataset HuggingFace
-├── 2_prepare_dataset.py      # Étape 2 — Formate les données en JSONL
-├── 3_finetune.sh             # Étape 3 — Lance le fine-tuning MLX (Mac)
-├── 4_test_model.py           # Étape 4 — Teste le modèle manuellement
-├── inference.py              # Moteur d'inférence (Mac + AWS)
-├── main.py                   # API FastAPI
-├── benchmark_aligned.py      # Benchmark sur paires réelles du dataset
-├── requirements.txt          # Dépendances Mac (MLX)
-├── requirements-aws.txt      # Dépendances AWS (PyTorch)
-└── model/
-    ├── llama-3.2-3b-mlx/        # Modèle base converti MLX (Mac uniquement)
-    ├── adapters/                 # Poids LoRA entraînés
-    └── dioula-llama-fused-dq/   # Modèle fusionné float16 (Mac + AWS)
+├── 1_download_dataset.py   # Télécharge le dataset brut HuggingFace
+├── 2_prepare_dataset.py    # Formate dataset_clean.json → JSONL (train/valid/test)
+├── 3_finetune.sh           # Fine-tuning QLoRA Llama 3.1 70B (AWS GPU)
+├── 4_test_model.py         # Test manuel du modèle
+├── build_dataset.py        # Construit dataset_clean.json (HF + connaissances)
+├── inference.py            # Moteur d'inférence (PyTorch)
+├── main.py                 # API FastAPI
+├── benchmark_aligned.py    # Benchmark FR→Dioula
+├── dataset_clean.json      # Dataset propre 38 027 paires (versionné)
+├── setup_aws.sh            # Script de setup complet sur AWS
+├── requirements.txt        # Dépendances Mac (MLX, dev local)
+├── requirements-aws.txt    # Dépendances AWS (PyTorch + TRL + bitsandbytes)
+└── model/                  # Modèles et adapteurs (non versionné — voir S3/HF)
+    ├── llama-3.1-70b/          # Modèle de base (à télécharger sur AWS)
+    └── adapters/               # Poids LoRA après fine-tuning
 ```
 
-> Les dossiers `model/` et les fichiers `.jsonl` ne sont pas dans le repo Git
-> (trop lourds). Voir les sections Mac et AWS ci-dessous pour les obtenir.
+> `model/` et les fichiers `.jsonl` ne sont pas dans le repo (trop lourds).
+> Le dataset propre `dataset_clean.json` (~7 MB) est versionné.
 
 ---
 
-## Partie 1 — Développement sur Mac (Apple Silicon)
+## Démarrage rapide — AWS
 
 ### Prérequis
 
-- Mac M1 / M2 / M3 avec au moins **16 GB de RAM unifiée**
-- Python 3.10+
-- Compte HuggingFace avec accès à `meta-llama/Llama-3.2-3B-Instruct`
-  (demande d'accès gratuite sur https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct)
+- Instance EC2 avec GPU : **p3.2xlarge** (V100 16GB, min) ou **p4d.24xlarge** (A100 80GB, recommandé)
+- Ubuntu 22.04 LTS
+- Accès au modèle `meta-llama/Meta-Llama-3.1-70B-Instruct` sur HuggingFace
+  (demande gratuite sur https://huggingface.co/meta-llama/Meta-Llama-3.1-70B-Instruct)
+- Token HuggingFace : https://huggingface.co/settings/tokens
 
-### 1. Installation
-
-```bash
-python3 -m venv env
-source env/bin/activate
-pip install -r requirements.txt
-```
-
-### 2. Télécharger le modèle de base
+### 1. Cloner le repo et lancer le setup
 
 ```bash
-# Connexion HuggingFace (token sur https://huggingface.co/settings/tokens)
-huggingface-cli login
-
-# Convertit LLaMA 3.2 3B en format MLX quantizé 4-bit (~1.8 GB)
-mlx_lm.convert \
-  --hf-path meta-llama/Llama-3.2-3B-Instruct \
-  --mlx-path ./model/llama-3.2-3b-mlx \
-  -q
-```
-
-### 3. Télécharger et préparer le dataset
-
-```bash
-# Télécharge le dataset Dioula depuis HuggingFace (~13 MB)
-python3 1_download_dataset.py
-
-# Génère les fichiers JSONL d'entraînement (train / valid / test)
-# Chaque paire FR/Dioula produit 3 exemples (x3 augmentation)
-python3 2_prepare_dataset.py
-```
-
-### 4. Fine-tuning (LoRA)
-
-```bash
-bash 3_finetune.sh
-```
-
-Ce script lance `mlx_lm.lora` avec les paramètres suivants :
-- `--iters 3000` — itérations (augmenter à 10 000+ pour la production)
-- `--num-layers 16` — couches LoRA
-- `--learning-rate 1e-5`
-- `--batch-size 2`
-- `--save-every 500` — sauvegarde un checkpoint toutes les 500 itérations
-
-Les poids LoRA sont sauvegardés dans `model/adapters/`.
-
-### 5. Générer le modèle fusionné (pour AWS)
-
-Après l'entraînement, fusionne les poids LoRA dans le modèle de base.
-Cette étape génère un modèle **float16 standard** (~6.4 GB) lisible sur AWS.
-
-```bash
-mlx_lm.fuse \
-  --model ./model/llama-3.2-3b-mlx \
-  --adapter-path ./model/adapters \
-  --save-path ./model/dioula-llama-fused-dq \
-  --dequantize
-```
-
-> Important : utilise toujours `--dequantize`. Sans ce flag, la fusion sur un
-> modèle quantizé (4-bit) produit un résultat corrompu.
-
-### 6. Tester le modèle
-
-```bash
-# Test manuel avec quelques phrases
-python3 4_test_model.py
-
-# Benchmark sur 30 paires réelles du dataset
-python3 benchmark_aligned.py
-```
-
-### 7. Lancer l'API en local
-
-```bash
-uvicorn main:app --reload --port 8000
-```
-
-L'API est disponible sur http://localhost:8000  
-Documentation interactive : http://localhost:8000/docs
-
----
-
-## Partie 2 — Déploiement sur AWS
-
-### Prérequis AWS
-
-- Instance **EC2** recommandée : `g4dn.xlarge` (GPU T4, 16 GB VRAM) ou `g5.xlarge` (GPU A10G)
-- Pour tester sans GPU : `t3.large` (CPU seulement, inférence lente)
-- OS : Ubuntu 22.04 LTS
-- Python 3.10+
-
-### Ce qu'il faut uploader
-
-Le modèle fusionné (`model/dioula-llama-fused-dq/`, ~6.4 GB) est trop lourd
-pour GitHub. Deux options pour le mettre à disposition sur AWS :
-
-**Option A — HuggingFace Hub (recommandé)**
-
-```bash
-# Sur Mac, après le fine-tuning :
-huggingface-cli login
-huggingface-cli upload TON_USERNAME/dioula-llama-fused-dq \
-  ./model/dioula-llama-fused-dq
-```
-
-Puis sur AWS :
-
-```bash
-huggingface-cli download TON_USERNAME/dioula-llama-fused-dq \
-  --local-dir ./model/dioula-llama-fused-dq
-```
-
-**Option B — Amazon S3**
-
-```bash
-# Sur Mac :
-aws s3 cp ./model/dioula-llama-fused-dq/ \
-  s3://TON_BUCKET/dioula-llama-fused-dq/ --recursive
-
-# Sur AWS EC2 :
-aws s3 cp s3://TON_BUCKET/dioula-llama-fused-dq/ \
-  ./model/dioula-llama-fused-dq/ --recursive
-```
-
-### Déploiement sur EC2
-
-```bash
-# 1. Cloner le repo
 git clone https://github.com/TON_USERNAME/dioula-ai.git
 cd dioula-ai
 
-# 2. Environnement Python
-python3 -m venv env
-source env/bin/activate
+export HF_TOKEN=hf_xxxxxxxxxxxx   # ton token HuggingFace
+bash setup_aws.sh
+```
 
-# 3. Installer les dépendances AWS (PyTorch, pas MLX)
+Le script fait tout automatiquement :
+1. Installe les dépendances système
+2. Crée l'environnement Python
+3. Installe PyTorch + HuggingFace + TRL + bitsandbytes
+4. Télécharge Llama 3.1 70B (~140 GB)
+5. Prépare le dataset (114 075 exemples)
+6. Lance le fine-tuning QLoRA
+
+### 2. Setup manuel (étape par étape)
+
+```bash
+# Environnement Python
+python3 -m venv env && source env/bin/activate
 pip install -r requirements-aws.txt
 
-# 4. Récupérer le modèle (voir options A ou B ci-dessus)
-mkdir -p model
-# ... télécharger dioula-llama-fused-dq/ dans model/
+# Télécharger Llama 3.1 70B
+huggingface-cli login
+huggingface-cli download meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --local-dir ./model/llama-3.1-70b
 
-# 5. Lancer l'API
+# Préparer le dataset
+python3 2_prepare_dataset.py
+
+# Lancer le fine-tuning
+bash 3_finetune.sh
+```
+
+### 3. Lancer l'API après fine-tuning
+
+```bash
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-> `inference.py` détecte automatiquement qu'il est sur Linux et charge
-> le backend PyTorch. Aucune modification de code nécessaire.
+---
 
-### Ports à ouvrir dans le Security Group EC2
+## Dataset
 
-| Port | Protocole | Usage |
-|---|---|---|
-| 22 | TCP | SSH |
-| 8000 | TCP | API Dioula-AI |
+Le dataset `dataset_clean.json` est construit depuis deux sources :
 
-### Lancement en production (avec systemd)
+| Source | Paires |
+|---|---|
+| OBY632/merged-bambara-dioula-dataset (HuggingFace) | 37 561 |
+| Connaissances linguistiques structurées | 466 |
+| **Total unique (après déduplication)** | **38 027** |
 
-Pour que l'API redémarre automatiquement après un reboot :
+Couverture thématique : salutations, famille, santé, nourriture, animaux, couleurs,
+nombres, temps, lieux, transports, commerce, école, émotions, religion, agriculture,
+proverbes, expressions idiomatiques.
+
+Pour reconstruire le dataset depuis zéro :
+
+```bash
+python3 build_dataset.py
+```
+
+---
+
+## Fine-tuning — Paramètres QLoRA
+
+| Paramètre | Valeur |
+|---|---|
+| Modèle de base | Llama 3.1 70B Instruct |
+| Quantization | 4-bit (bitsandbytes) |
+| LoRA rank | 16 |
+| LoRA alpha | 32 |
+| Modules ciblés | q_proj, k_proj, v_proj, o_proj |
+| Époques | 3 |
+| Batch size | 4 (+ grad accumulation ×4) |
+| Learning rate | 2e-4 (cosine scheduler) |
+| Max seq length | 512 tokens |
+
+---
+
+## Endpoints de l'API
+
+### GET /health
+```json
+{ "status": "healthy", "model": "llama-3.1-70b-dioula-finetuned" }
+```
+
+### POST /api/v1/translate
+```bash
+curl -X POST http://localhost:8000/api/v1/translate \
+  -H "Content-Type: application/json" \
+  -d '{"texte": "bonjour", "direction": "fr_to_dioula"}'
+```
+```json
+{ "success": true, "reponse": "i ni sogoma", "latence_ms": 340 }
+```
+
+### POST /api/v1/chat
+```bash
+curl -X POST http://localhost:8000/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Traduis en Dioula : merci beaucoup"}'
+```
+
+---
+
+## Instances AWS recommandées
+
+| Instance | GPU | VRAM | Fine-tuning 70B | Coût/h |
+|---|---|---|---|---|
+| p3.2xlarge | V100 | 16 GB | Limite (batch=1) | ~$3 |
+| p3.8xlarge | 4× V100 | 64 GB | OK | ~$12 |
+| p4d.24xlarge | 8× A100 | 320 GB | Idéal | ~$32 |
+| g5.12xlarge | 4× A10G | 96 GB | OK | ~$16 |
+
+> Pour le fine-tuning QLoRA 70B, minimum recommandé : **40 GB VRAM** (p3.8xlarge ou g5.12xlarge).
+
+### Ports Security Group EC2
+
+| Port | Usage |
+|---|---|
+| 22 | SSH |
+| 8000 | API Dioula-AI |
+
+### Lancement en production (systemd)
 
 ```bash
 sudo nano /etc/systemd/system/dioula-ai.service
@@ -228,6 +188,7 @@ After=network.target
 [Service]
 User=ubuntu
 WorkingDirectory=/home/ubuntu/dioula-ai
+EnvironmentFile=/home/ubuntu/dioula-ai/.env
 ExecStart=/home/ubuntu/dioula-ai/env/bin/uvicorn main:app --host 0.0.0.0 --port 8000
 Restart=always
 
@@ -239,66 +200,3 @@ WantedBy=multi-user.target
 sudo systemctl enable dioula-ai
 sudo systemctl start dioula-ai
 ```
-
----
-
-## Endpoints de l'API
-
-### GET /
-Vérifie que l'API est en ligne.
-
-### GET /health
-```json
-{ "status": "healthy", "model": "llama-3.2-3b-dioula-finetuned" }
-```
-
-### POST /api/v1/chat
-Conversation libre en Français ou Dioula.
-
-```bash
-curl -X POST http://localhost:8000/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Traduis en Dioula : bonjour"}'
-```
-
-```json
-{
-  "success": true,
-  "session_id": "...",
-  "reponse": "a bɛn",
-  "langue_detectee": "français",
-  "langue_reponse": "dioula",
-  "mode": "traduction",
-  "latence_ms": 340
-}
-```
-
-### POST /api/v1/translate
-Traduction directe avec direction explicite.
-
-```bash
-curl -X POST http://localhost:8000/api/v1/translate \
-  -H "Content-Type: application/json" \
-  -d '{"texte": "au revoir", "direction": "fr_to_dioula"}'
-```
-
----
-
-## État du modèle
-
-Le modèle est actuellement entraîné sur **3 000 itérations** (moins d'une époque
-sur le dataset complet). Les traductions courtes fonctionnent partiellement.
-
-Pour un niveau production :
-- Relancer `3_finetune.sh` avec `--iters 10000` (voire 20 000)
-- Re-générer le modèle fusionné avec `mlx_lm.fuse --dequantize`
-- Re-uploader sur HuggingFace Hub ou S3
-
-## Exigences matérielles
-
-| | Mac (dev) | AWS (prod) |
-|---|---|---|
-| RAM | 16 GB unifiée | 16 GB VRAM (GPU) |
-| Stockage | 30 GB | 15 GB |
-| Puce | M1 Pro | T4 / A10G |
-| Temps d'inférence | ~0.5s | ~0.3s (GPU) |

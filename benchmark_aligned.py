@@ -57,8 +57,10 @@ MODEL_PATH = "./model/dioula-llama-fused-dq"  # dequantized
 
 PROMPT_TEMPLATE = (
     "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n"
-    "Tu es un traducteur Français-Dioula. "
-    "Réponds UNIQUEMENT avec la traduction en Dioula, sans explication.<|eot_id|>"
+    "Tu es un assistant expert en langue Dioula (Jula), "
+    "parlée en Côte d'Ivoire et au Burkina Faso. "
+    "Tu peux traduire entre le français et le Dioula, "
+    "et converser naturellement dans les deux langues.<|eot_id|>"
     "<|start_header_id|>user<|end_header_id|>\n"
     "Traduis en Dioula : {text}<|eot_id|>"
     "<|start_header_id|>assistant<|end_header_id|>\n"
